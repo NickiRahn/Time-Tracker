@@ -26,7 +26,9 @@ MONTH_ORDER = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV"
 MONTH_FULL = {"JANUARY":"JAN","FEBRUARY":"FEB","MARCH":"MAR","APRIL":"APR","MAY":"MAY","JUNE":"JUN","JULY":"JUL","AUGUST":"AUG","SEPTEMBER":"SEP","OCTOBER":"OCT","NOVEMBER":"NOV","DECEMBER":"DEC"}
 MONTH_LONG = {v:k.title() for k,v in MONTH_FULL.items()}
 
-# ── Theme bundling rules — first match wins. Edit freely to refine. ───────────
+# ── Theme bundling — applied WITHIN each task only, never across tasks. ───────
+# First match wins. Add/edit lines as your projects change.
+# Each line: ("Theme Name", ["keyword", "keyword", ...])
 THEME_RULES = [
     ("Project Lily",            ["lily"]),
     ("EOS Facilitation",        ["eos", "level 10", "leve l10", "level l10", "l10"]),
@@ -39,7 +41,7 @@ THEME_RULES = [
     ("Board / BOD",             ["bod", "board meeting", "board", "advisory board"]),
     ("Event Planning",          ["centerpiece", "party", "75 year", "celebration", "event", "watches", "gift"]),
     ("Performance Review Prep", ["annual review", "feedback", "paf", "performance", "review template", "recap with taylor", "prep for 1:1"]),
-    ("HR / Legal (Amanda)",     ["legal", "claim", "amanda", "amy", " hr", "re: hr"]),
+    ("HR / Legal",              ["legal", "claim", "amanda", "amy", " hr", "re: hr"]),
     ("1:1s",                    ["1:1"]),
     ("Paycom Admin",            ["paycom"]),
     ("Bonus Calculations",      ["bonus"]),
@@ -53,7 +55,7 @@ THEME_RULES = [
     ("Holiday / PTO",           ["memorial", "holiday", "pto", "sick"]),
     ("Networking",              ["vistage", "peer group"]),
 ]
-THEME_MIN_HOURS = 1.0   # themes below this are dropped from summaries
+THEME_MIN_HOURS = 1.0   # themes below this (within a task) are dropped from summaries
 THEME_TOP_N = 4         # max themes shown per task
 
 def theme_for(desc):
@@ -134,7 +136,7 @@ def parse_workinghours_file(uploaded_file, filename):
 
     summary = df.groupby("canon")["mins"].sum().apply(lambda m: m/60.0).to_dict()
 
-    # bundled themes per task: {task: {theme: hours}}  (sorted desc, stored as list of [theme, hours])
+    # Themes computed WITHIN each task separately. {task: [[theme, hours], ...]}
     themes = {}
     for task, g in df.groupby("canon"):
         themed = g.dropna(subset=["theme"])
@@ -160,7 +162,6 @@ def parse_workinghours_file(uploaded_file, filename):
     return year, month, record, None
 
 def top_themes(theme_list, min_h=THEME_MIN_HOURS, n=THEME_TOP_N):
-    """theme_list is [[name, hours], ...] sorted desc. Returns filtered top N."""
     out = [(name, h) for name, h in theme_list if h >= min_h]
     return out[:n]
 
@@ -472,3 +473,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
