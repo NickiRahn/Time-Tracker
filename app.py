@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="NR Calendar Audit Dashboard", page_icon="📅", layout="wide", initial_sidebar_state="expanded")
 
@@ -21,6 +21,9 @@ GOALS_2026 = {
     "COMMUTING/TRAVEL":0.025,"NETWORKING/PEER GROUPS":0.015,
 }
 COMPANY_TASKS = {"MAPCO","MAGNUM","MCP","MCC","M-COMPANIES","MTI","MFE","CORP DEV"}
+# Excluded from the "Company Support vs All Other DUTIES" comparison (non-duty buckets).
+# To count commuting as a duty, remove "COMMUTING/TRAVEL" from this set.
+NON_DUTY = {"PTO/SICK TIME","OFFICE CLOSED","COMMUTING/TRAVEL"}
 DATA_FILE = "saved_data.json"
 MONTH_ORDER = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 MONTH_FULL = {"JANUARY":"JAN","FEBRUARY":"FEB","MARCH":"MAR","APRIL":"APR","MAY":"MAY","JUNE":"JUN","JULY":"JUL","AUGUST":"AUG","SEPTEMBER":"SEP","OCTOBER":"OCT","NOVEMBER":"NOV","DECEMBER":"DEC"}
@@ -143,10 +146,9 @@ def parse_workinghours_file(uploaded_file, filename):
         s = themed.groupby("theme")["mins"].sum().sort_values(ascending=False)
         themes[task] = [[t, round(mins/60.0, 2)] for t, mins in s.items()]
 
-    daily_series = df.groupby("day_str")["mins"].sum()
-    daily = {}
-    for day_str in sorted(daily_series.index, key=lambda s: datetime.strptime(s, "%b %d")):
-        daily[day_str] = round(daily_series[day_str]/60.0, 2)
+    df["iso"] = pd.to_datetime(df["Day"]).dt.strftime("%Y-%m-%d")
+    daily_series = df.groupby("iso")["mins"].sum()
+    daily = {iso: round(daily_series[iso]/60.0, 2) for iso in sorted(daily_series.index)}
 
     detail = []
     if "Start" in df.columns and "End" in df.columns:
@@ -182,11 +184,111 @@ def make_donut(task_hours, title=""):
         height=340, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     return fig
 
+def _fmt_day(iso):
+    try: return datetime.strptime(iso, "%Y-%m-%d").strftime("%b %d")
+    except Exception: return iso
+
 def make_daily_bars(daily):
-    days = list(daily.keys()); hours = list(daily.values())
+    isos = sorted(daily.keys())
+    days = [_fmt_day(d) for d in isos]; hours = [daily[d] for d in isos]
     fig = go.Figure(go.Bar(x=days, y=hours, marker_color="#3266ad", hovertemplate="%{x}<br>%{y:.1f}h<extra></extra>"))
     fig.update_layout(height=300, margin=dict(t=10,b=70,l=0,r=10), yaxis=dict(title="Hours", gridcolor="#f0ede8"),
         xaxis=dict(tickangle=-60, tickfont=dict(size=9)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.25)
+    return fig
+
+def make_company_distribution(task_hours):
+    """Pie of only the direct-company tasks, each its own slice."""
+    comp = {t: h for t, h in task_hours.items() if t in COMPANY_TASKS and h > 0}
+    if not comp: return None
+    return make_donut(comp, "Company Support Distribution")
+
+def make_support_vs_other(task_hours):
+    """Company Support vs All Other Duties (excludes NON_DUTY buckets)."""
+    comp = sum(h for t, h in task_hours.items() if t in COMPANY_TASKS)
+    other = sum(h for t, h in task_hours.items() if t not in COMPANY_TASKS and t not in NON_DUTY)
+    if comp + other == 0: return None
+    fig = go.Figure(go.Pie(labels=["Company Support", "All Other Duties"], values=[comp, other],
+        marker_colors=["#3266ad", "#D85A30"], hole=0.55, textinfo="percent",
+        hovertemplate="<b>%{label}</b><br>%{value:.1f}h (%{percent})<extra></extra>"))
+    fig.update_layout(title=dict(text="Company Support vs. All Other Duties", font=dict(size=13), x=0.5, xanchor="center"),
+        showlegend=True, legend=dict(font=dict(size=10), orientation="h", y=-0.05),
+        margin=dict(t=50,b=20,l=10,r=10), height=340, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+def weekly_totals(daily):
+    """Sunday–Saturday weekly buckets from ISO-dated daily hours."""
+    weeks = {}
+    for iso, hrs in daily.items():
+        try: d = datetime.strptime(iso, "%Y-%m-%d")
+        except Exception: continue
+        start = d - timedelta(days=(d.weekday() + 1) % 7)  # back up to Sunday
+        weeks[start] = weeks.get(start, 0) + hrs
+    out = []
+    for start in sorted(weeks):
+        end = start + timedelta(days=6)
+        out.append((f"{start.strftime('%b %d')} – {end.strftime('%b %d')}", round(weeks[start], 2)))
+    return out
+
+def make_weekly_bars(daily):
+    wk = weekly_totals(daily)
+    if not wk: return None
+    labels = [w[0] for w in wk]; hours = [w[1] for w in wk]
+    fig = go.Figure(go.Bar(x=labels, y=hours, marker_color="#1D9E75",
+        text=[f"{h:.1f}h" for h in hours], textposition="outside",
+        hovertemplate="%{x}<br>%{y:.1f}h<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(t=20,b=50,l=0,r=10),
+        yaxis=dict(title="Hours", gridcolor="#f0ede8"),
+        xaxis=dict(tickfont=dict(size=10)), paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)", bargap=0.3)
+    return fig
+
+# Direct-company entities, ordered for consistent chart coloring/legend
+ENTITY_ORDER = ["MAPCO", "MCC", "MTI", "MFE", "MAGNUM", "MCP", "M-COMPANIES", "CORP DEV"]
+
+def _entities_present(month_task_hours_list):
+    totals = {}
+    for th in month_task_hours_list:
+        for t, h in th.items():
+            if t in COMPANY_TASKS:
+                totals[t] = totals.get(t, 0) + h
+    present = [e for e in ENTITY_ORDER if totals.get(e, 0) > 0]
+    # include any company task not in ENTITY_ORDER, by total desc
+    extras = sorted([t for t in totals if t not in ENTITY_ORDER and totals[t] > 0], key=lambda t:-totals[t])
+    return present + extras, totals
+
+def make_entity_grouped_bars(labels, month_task_hours_list):
+    entities, _ = _entities_present(month_task_hours_list)
+    if not entities: return None
+    fig = go.Figure()
+    for e in entities:
+        y = [th.get(e, 0) for th in month_task_hours_list]
+        fig.add_trace(go.Bar(name=e, x=labels, y=y, marker_color=task_color(e),
+            hovertemplate=f"<b>{e}</b><br>%{{x}}: %{{y:.1f}}h<extra></extra>"))
+    fig.update_layout(barmode="group", height=340, margin=dict(t=10,b=40,l=0,r=10),
+        yaxis=dict(title="Hours", gridcolor="#f0ede8"), xaxis=dict(tickfont=dict(size=11)),
+        legend=dict(orientation="h", y=-0.2, font=dict(size=10)),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.25, bargroupgap=0.05)
+    return fig
+
+def make_entity_distribution(month_task_hours_list, title="Entity Support — Totals"):
+    entities, totals = _entities_present(month_task_hours_list)
+    if not entities: return None
+    comp = {e: totals[e] for e in entities}
+    return make_donut(comp, title)
+
+def make_entity_stacked_area(labels, month_task_hours_list):
+    entities, _ = _entities_present(month_task_hours_list)
+    if not entities or len(labels) < 2: return None
+    fig = go.Figure()
+    for e in entities:
+        y = [th.get(e, 0) for th in month_task_hours_list]
+        fig.add_trace(go.Scatter(name=e, x=labels, y=y, mode="lines", stackgroup="one",
+            line=dict(color=task_color(e), width=0.5), fillcolor=task_color(e),
+            hovertemplate=f"<b>{e}</b><br>%{{x}}: %{{y:.1f}}h<extra></extra>"))
+    fig.update_layout(height=340, margin=dict(t=10,b=40,l=0,r=10),
+        yaxis=dict(title="Hours", gridcolor="#f0ede8"), xaxis=dict(tickfont=dict(size=11)),
+        legend=dict(orientation="h", y=-0.2, font=dict(size=10)),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     return fig
 
 def make_goal_bars(task_hours, total_hours):
@@ -337,6 +439,24 @@ def main():
             if daily: st.plotly_chart(make_daily_bars(daily), use_container_width=True)
             else: st.info("No daily data available for this month.")
 
+        # Company-focused charts (match the April tab)
+        cl,cr = st.columns(2)
+        with cl:
+            st.markdown('<div class="section-header">Company Support Distribution</div>', unsafe_allow_html=True)
+            f_cd = make_company_distribution(task_hours)
+            if f_cd: st.plotly_chart(f_cd, use_container_width=True)
+            else: st.info("No direct company-support hours this month.")
+        with cr:
+            st.markdown('<div class="section-header">Company Support vs. All Other Duties</div>', unsafe_allow_html=True)
+            f_so = make_support_vs_other(task_hours)
+            if f_so: st.plotly_chart(f_so, use_container_width=True)
+            st.caption("All Other Duties excludes PTO/Sick, Office Closed, and Commuting/Travel.")
+
+        st.markdown('<div class="section-header">Weekly Hours Worked (Sun–Sat)</div>', unsafe_allow_html=True)
+        f_wk = make_weekly_bars(daily)
+        if f_wk: st.plotly_chart(f_wk, use_container_width=True)
+        else: st.info("No daily data available to compute weekly totals.")
+
         st.markdown('<div class="section-header">Key Areas of Time Usage</div>', unsafe_allow_html=True)
         render_task_cards(task_hours, themes, total)
 
@@ -381,6 +501,24 @@ def main():
                 md = {(sel_year,m):monthly[m] for m in monthly}
                 st.plotly_chart(make_trend(md, sorted(q_hours, key=q_hours.get, reverse=True)[:6]), use_container_width=True)
             else: st.info("Upload more months to see the trend.")
+        # Entity support charts (match the Q1 tab)
+        q_month_labels = [m for m in quarters[sel_q] if m in monthly]
+        q_month_list = [monthly[m] for m in q_month_labels]
+        st.markdown('<div class="section-header">Entity Support by Month</div>', unsafe_allow_html=True)
+        f_eb = make_entity_grouped_bars(q_month_labels, q_month_list)
+        if f_eb: st.plotly_chart(f_eb, use_container_width=True)
+        else: st.info("No direct company-support hours in this quarter yet.")
+        cl,cr = st.columns(2)
+        with cl:
+            st.markdown('<div class="section-header">Entity Support — Totals</div>', unsafe_allow_html=True)
+            f_ed = make_entity_distribution(q_month_list, f"{sel_q} {sel_year} Entity Support")
+            if f_ed: st.plotly_chart(f_ed, use_container_width=True)
+        with cr:
+            st.markdown('<div class="section-header">Entity Support — Stacked by Month</div>', unsafe_allow_html=True)
+            f_es = make_entity_stacked_area(q_month_labels, q_month_list)
+            if f_es: st.plotly_chart(f_es, use_container_width=True)
+            else: st.info("Upload 2+ months to see the stacked trend.")
+
         st.markdown('<div class="section-header">Key Areas of Time Usage — Quarter</div>', unsafe_allow_html=True)
         q_themes_sorted = {t: sorted(d.items(), key=lambda x:-x[1]) for t,d in q_themes.items()}
         render_task_cards(q_hours, q_themes_sorted, total_q)
@@ -412,7 +550,26 @@ def main():
         with cr:
             st.markdown('<div class="section-header">Monthly Trend (Top 6)</div>', unsafe_allow_html=True)
             st.plotly_chart(make_trend(monthly, sorted(y_hours, key=y_hours.get, reverse=True)[:6]), use_container_width=True)
-        st.markdown('<div class="section-header">Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
+        # Entity support charts (annual)
+        ann_months = sorted(monthly.keys(), key=lambda k: MONTH_ORDER.index(k[1]))
+        ann_labels = [k[1] for k in ann_months]
+        ann_list = [monthly[k] for k in ann_months]
+        st.markdown('<div class="section-header">Entity Support by Month</div>', unsafe_allow_html=True)
+        f_eb = make_entity_grouped_bars(ann_labels, ann_list)
+        if f_eb: st.plotly_chart(f_eb, use_container_width=True)
+        else: st.info("No direct company-support hours this year yet.")
+        cl,cr = st.columns(2)
+        with cl:
+            st.markdown('<div class="section-header">Entity Support — Year Totals</div>', unsafe_allow_html=True)
+            f_ed = make_entity_distribution(ann_list, f"{sel_year} Entity Support")
+            if f_ed: st.plotly_chart(f_ed, use_container_width=True)
+        with cr:
+            st.markdown('<div class="section-header">Entity Support — Stacked by Month</div>', unsafe_allow_html=True)
+            f_es = make_entity_stacked_area(ann_labels, ann_list)
+            if f_es: st.plotly_chart(f_es, use_container_width=True)
+            else: st.info("Upload 2+ months to see the stacked trend.")
+
+        st.markdown('<div class="section-header">All Activities — Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
         f = make_goal_bars(y_hours, total_y)
         if f: st.plotly_chart(f, use_container_width=True)
         st.markdown('<div class="section-header">Annual Pace Tracker</div>', unsafe_allow_html=True)
@@ -473,4 +630,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
