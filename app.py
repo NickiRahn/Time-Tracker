@@ -80,15 +80,29 @@ def task_color(task):
     return TASK_COLORS.get(task, TASK_COLORS.get(task.upper(), "#999999"))
 
 def parse_duration_to_mins(d):
+    """Handles '2h 5m', '45m', '1h', 'HH:MM' (e.g. '08:00', '00:43'),
+    Excel fractional days, and plain decimal hours."""
     if pd.isna(d): return 0
-    d = str(d).strip(); total = 0
+    d = str(d).strip()
+    if not d: return 0
+    # HH:MM or HH:MM:SS time format (e.g. '08:00', '01:38:30')
+    if re.fullmatch(r"\d{1,3}:\d{2}(:\d{2})?", d):
+        parts = [int(p) for p in d.split(":")]
+        h = parts[0]; m = parts[1] if len(parts) > 1 else 0; s = parts[2] if len(parts) > 2 else 0
+        return h*60 + m + s/60.0
+    # '2h 5m' / '45m' / '1h' format
+    total = 0
     h = re.search(r"(\d+)\s*h", d); m = re.search(r"(\d+)\s*m", d)
     if h: total += int(h.group(1))*60
     if m: total += int(m.group(1))
-    if not h and not m:
-        try: total = float(d)*60
-        except ValueError: total = 0
-    return total
+    if h or m:
+        return total
+    # plain number: Excel fractional day (<1.5 -> days) else decimal hours
+    try:
+        val = float(d)
+        return val*24*60 if 0 < val < 1.5 else val*60
+    except ValueError:
+        return 0
 
 def parse_filename_period(filename):
     name = os.path.splitext(filename)[0].upper()
@@ -407,6 +421,10 @@ def main():
         entry = saved[keys[labels.index(sel_label)]]
         task_hours = get_summary(entry); themes = get_themes(entry); daily = get_daily(entry)
         total = sum(task_hours.values())
+        if total <= 0:
+            st.warning("This month loaded with 0 total hours — the Duration column may not have parsed. "
+                       "Check that the file's Duration values look like '2h 5m' or 'HH:MM', then re-upload.")
+            return
         company = sum(v for k,v in task_hours.items() if k in COMPANY_TASKS); other = total-company
 
         c1,c2,c3,c4 = st.columns(4)
