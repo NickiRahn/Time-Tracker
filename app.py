@@ -332,17 +332,6 @@ def generate_commentary(task_hours, total_hours):
     if not lines: lines.append("✅ All tasks are tracking close to 2026 goals.")
     return lines
 
-def build_email_text(task_hours, themes_by_task, total, month_label, task_min_pct=0.01):
-    lines = [f"Here is my time audit for {month_label} and a breakdown of key areas of time usage:", ""]
-    for task, hrs in sorted(task_hours.items(), key=lambda x:-x[1]):
-        if hrs <= 0 or (total and hrs/total < task_min_pct): continue
-        pct = hrs/total*100 if total else 0
-        lines.append(f"{task}: {hrs:.1f} hrs ({pct:.0f}%)")
-        for name, _ in top_themes(themes_by_task.get(task, [])):
-            lines.append(f"   - {name}")
-        lines.append("")
-    return "\n".join(lines)
-
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono&display=swap');
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
@@ -419,8 +408,6 @@ def main():
         task_hours = get_summary(entry); themes = get_themes(entry); daily = get_daily(entry)
         total = sum(task_hours.values())
         company = sum(v for k,v in task_hours.items() if k in COMPANY_TASKS); other = total-company
-        sel_mon_abbr, sel_year = sel_label.split()
-        month_label = f"{MONTH_LONG.get(sel_mon_abbr, sel_mon_abbr)} {sel_year}"
 
         c1,c2,c3,c4 = st.columns(4)
         c1.markdown(f'<div class="metric-card"><div class="metric-label">Total Hours</div><div class="metric-value">{total:.1f}</div><div class="metric-sub">{sel_label}</div></div>', unsafe_allow_html=True)
@@ -460,9 +447,6 @@ def main():
         st.markdown('<div class="section-header">Key Areas of Time Usage</div>', unsafe_allow_html=True)
         render_task_cards(task_hours, themes, total)
 
-        st.markdown('<div class="section-header">📋 Ready-to-Send Email Text</div>', unsafe_allow_html=True)
-        st.caption("Copy this straight into your email to Taylor & Sarah:")
-        st.code(build_email_text(task_hours, themes, total, month_label), language=None)
 
     elif view == "📈 Quarterly":
         st.markdown("# Quarterly Review")
