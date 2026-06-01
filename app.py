@@ -24,6 +24,45 @@ COMPANY_TASKS = {"MAPCO","MAGNUM","MCP","MCC","M-COMPANIES","MTI","MFE","CORP DE
 DATA_FILE = "saved_data.json"
 MONTH_ORDER = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 MONTH_FULL = {"JANUARY":"JAN","FEBRUARY":"FEB","MARCH":"MAR","APRIL":"APR","MAY":"MAY","JUNE":"JUN","JULY":"JUL","AUGUST":"AUG","SEPTEMBER":"SEP","OCTOBER":"OCT","NOVEMBER":"NOV","DECEMBER":"DEC"}
+MONTH_LONG = {v:k.title() for k,v in MONTH_FULL.items()}
+
+# ── Theme bundling rules — first match wins. Edit freely to refine. ───────────
+THEME_RULES = [
+    ("Project Lily",            ["lily"]),
+    ("EOS Facilitation",        ["eos", "level 10", "leve l10", "level l10", "l10"]),
+    ("Strategy & Training",     ["strateg"]),
+    ("Insurance",               ["insurance", "lockton", "broker", "flood and peterson", "ima meeting", " ima "]),
+    ("Corp Dev / M&A",          ["corp dev", "corp -", "corp  -", "m&a", "qofe", "diligence", "data room"]),
+    ("Marketing",               ["marketing", "huebner", "ashton"]),
+    ("Budget Review",           ["budget"]),
+    ("Award Event",             ["award"]),
+    ("Board / BOD",             ["bod", "board meeting", "board", "advisory board"]),
+    ("Event Planning",          ["centerpiece", "party", "75 year", "celebration", "event", "watches", "gift"]),
+    ("Performance Review Prep", ["annual review", "feedback", "paf", "performance", "review template", "recap with taylor", "prep for 1:1"]),
+    ("HR / Legal (Amanda)",     ["legal", "claim", "amanda", "amy", " hr", "re: hr"]),
+    ("1:1s",                    ["1:1"]),
+    ("Paycom Admin",            ["paycom"]),
+    ("Bonus Calculations",      ["bonus"]),
+    ("Syspro",                  ["syspro"]),
+    ("401k",                    ["401k"]),
+    ("CFO Search",              ["cfo"]),
+    ("AI / Tooling",            ["gem", "trello", "app review", "review app", "karmak"]),
+    ("Email & Admin",           ["email", "expenses", "docking", "calendar audit"]),
+    ("IT Support",              ["it and", "it check", "it assistance", "it assist"]),
+    ("Commuting",               ["to mapco", "commute", "drive", "to home", "to boulder", "to store", "picking up", "drop "]),
+    ("Holiday / PTO",           ["memorial", "holiday", "pto", "sick"]),
+    ("Networking",              ["vistage", "peer group"]),
+]
+THEME_MIN_HOURS = 1.0   # themes below this are dropped from summaries
+THEME_TOP_N = 4         # max themes shown per task
+
+def theme_for(desc):
+    d = str(desc).lower()
+    for theme, kws in THEME_RULES:
+        for kw in kws:
+            if kw in d:
+                return theme
+    return re.sub(r"\s+", " ", str(desc)).strip().title()
 
 def normalize_task(name):
     if not isinstance(name, str): return None
@@ -72,9 +111,9 @@ def parse_workinghours_file(uploaded_file, filename):
     try:
         df = pd.read_excel(uploaded_file)
     except Exception as e:
-        return None, None, None, None, f"Could not open file: {e}"
+        return None, None, None, f"Could not open file: {e}"
     if not {"Day","Task","Duration"}.issubset(set(df.columns)):
-        return None, None, None, None, f"Missing expected columns. Found: {list(df.columns)}. Need: Day, Task, Duration."
+        return None, None, None, f"Missing expected columns. Found: {list(df.columns)}. Need: Day, Task, Duration."
     df = df.dropna(subset=["Task"])
     df = df[df["Task"].astype(str).str.strip().str.upper() != "TOTAL"]
     df = df[df["Task"].astype(str).str.strip() != ""]
@@ -86,20 +125,44 @@ def parse_workinghours_file(uploaded_file, filename):
             year = year or fd.year; month = month or MONTH_ORDER[fd.month-1]
         except Exception: pass
     if year is None or month is None:
-        return None, None, None, None, "Couldn't determine month/year. Name the file like 'WorkingHours_May_2026.xlsx'."
+        return None, None, None, "Couldn't determine month/year. Name the file like 'WorkingHours_May_2026.xlsx'."
+
     df["canon"] = df["Task"].apply(normalize_task)
+    df["desc"] = df["Work unit description"].fillna("") if "Work unit description" in df.columns else ""
+    df["day_str"] = pd.to_datetime(df["Day"]).dt.strftime("%b %d")
+    df["theme"] = df["desc"].apply(lambda d: theme_for(d) if str(d).strip() else None)
+
     summary = df.groupby("canon")["mins"].sum().apply(lambda m: m/60.0).to_dict()
+
+    # bundled themes per task: {task: {theme: hours}}  (sorted desc, stored as list of [theme, hours])
+    themes = {}
+    for task, g in df.groupby("canon"):
+        themed = g.dropna(subset=["theme"])
+        s = themed.groupby("theme")["mins"].sum().sort_values(ascending=False)
+        themes[task] = [[t, round(mins/60.0, 2)] for t, mins in s.items()]
+
+    daily_series = df.groupby("day_str")["mins"].sum()
+    daily = {}
+    for day_str in sorted(daily_series.index, key=lambda s: datetime.strptime(s, "%b %d")):
+        daily[day_str] = round(daily_series[day_str]/60.0, 2)
+
     detail = []
     if "Start" in df.columns and "End" in df.columns:
         d2 = df.dropna(subset=["Start","End"]).copy()
-        d2["Day_str"] = pd.to_datetime(d2["Day"]).dt.strftime("%b %d")
         d2["Start_str"] = pd.to_datetime(d2["Start"]).dt.strftime("%H:%M")
         d2["End_str"] = pd.to_datetime(d2["End"]).dt.strftime("%H:%M")
         for _, r in d2.iterrows():
-            detail.append({"day":r["Day_str"],"task":str(r["Task"]).strip(),
+            detail.append({"day":r["day_str"],"task":str(r["Task"]).strip(),
                 "desc":"" if pd.isna(r.get("Work unit description")) else str(r["Work unit description"]),
                 "start":r["Start_str"],"end":r["End_str"],"mins":r["mins"]})
-    return year, month, summary, detail, None
+
+    record = {"summary":summary, "themes":themes, "daily":daily, "detail":detail}
+    return year, month, record, None
+
+def top_themes(theme_list, min_h=THEME_MIN_HOURS, n=THEME_TOP_N):
+    """theme_list is [[name, hours], ...] sorted desc. Returns filtered top N."""
+    out = [(name, h) for name, h in theme_list if h >= min_h]
+    return out[:n]
 
 def traffic_light(actual_pct, goal_pct):
     if goal_pct == 0: return "green"
@@ -116,6 +179,13 @@ def make_donut(task_hours, title=""):
     fig.update_layout(title=dict(text=title, font=dict(size=13), x=0.5, xanchor="center"),
         showlegend=True, legend=dict(font=dict(size=10)), margin=dict(t=50,b=20,l=10,r=10),
         height=340, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+def make_daily_bars(daily):
+    days = list(daily.keys()); hours = list(daily.values())
+    fig = go.Figure(go.Bar(x=days, y=hours, marker_color="#3266ad", hovertemplate="%{x}<br>%{y:.1f}h<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(t=10,b=70,l=0,r=10), yaxis=dict(title="Hours", gridcolor="#f0ede8"),
+        xaxis=dict(tickangle=-60, tickfont=dict(size=9)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.25)
     return fig
 
 def make_goal_bars(task_hours, total_hours):
@@ -159,6 +229,17 @@ def generate_commentary(task_hours, total_hours):
     if not lines: lines.append("✅ All tasks are tracking close to 2026 goals.")
     return lines
 
+def build_email_text(task_hours, themes_by_task, total, month_label, task_min_pct=0.01):
+    lines = [f"Here is my time audit for {month_label} and a breakdown of key areas of time usage:", ""]
+    for task, hrs in sorted(task_hours.items(), key=lambda x:-x[1]):
+        if hrs <= 0 or (total and hrs/total < task_min_pct): continue
+        pct = hrs/total*100 if total else 0
+        lines.append(f"{task}: {hrs:.1f} hrs ({pct:.0f}%)")
+        for name, _ in top_themes(themes_by_task.get(task, [])):
+            lines.append(f"   - {name}")
+        lines.append("")
+    return "\n".join(lines)
+
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono&display=swap');
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
@@ -167,16 +248,31 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .metric-value { font-size:1.7rem; font-weight:600; color:#1a1917; letter-spacing:-0.02em; line-height:1.1; }
 .metric-sub { font-size:0.78rem; color:#7a7874; margin-top:2px; }
 .section-header { font-size:1.1rem; font-weight:600; color:#1a1917; margin:1.5rem 0 0.75rem 0; padding-bottom:6px; border-bottom:1.5px solid #e8e5e0; }
-.traffic-row { display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid #f0ede8; font-size:0.85rem; }
-.dot-green { width:10px;height:10px;border-radius:50%;background:#22c55e;flex-shrink:0; }
-.dot-yellow { width:10px;height:10px;border-radius:50%;background:#eab308;flex-shrink:0; }
-.dot-red { width:10px;height:10px;border-radius:50%;background:#ef4444;flex-shrink:0; }
 .commentary-box { background:#f8f6f2; border-left:3px solid #3266ad; border-radius:0 8px 8px 0; padding:0.85rem 1rem; margin:0.5rem 0; font-size:0.875rem; color:#1a1917; }
 .upload-hint { background:#f0f4ff; border:1px dashed #3266ad; border-radius:10px; padding:1.5rem; text-align:center; color:#3266ad; font-size:0.9rem; }
+.task-summary { background:white; border:1px solid #e8e5e0; border-left:4px solid #3266ad; border-radius:8px; padding:0.9rem 1.1rem; margin-bottom:0.75rem; }
+.task-title { font-size:1.05rem; font-weight:600; color:#1a1917; }
+.task-hours { font-family:'DM Mono',monospace; font-size:0.9rem; color:#3266ad; font-weight:500; }
+.task-bullet { font-size:0.875rem; color:#444; margin:3px 0 3px 14px; }
+.theme-h { color:#7a7874; font-family:'DM Mono',monospace; font-size:0.8rem; }
 </style>""", unsafe_allow_html=True)
 
-def get_summary(entry):
-    return entry.get("summary", entry) if isinstance(entry, dict) and "summary" in entry else (entry if isinstance(entry, dict) else {})
+def get_summary(entry): return entry.get("summary", {}) if isinstance(entry, dict) else {}
+def get_themes(entry): return entry.get("themes", {}) if isinstance(entry, dict) else {}
+def get_daily(entry): return entry.get("daily", {}) if isinstance(entry, dict) else {}
+
+def render_task_cards(task_hours, themes_by_task, total):
+    for task, hrs in sorted(task_hours.items(), key=lambda x:-x[1]):
+        if hrs <= 0: continue
+        pct = hrs/total*100 if total else 0
+        bullets = "".join(
+            f'<div class="task-bullet">• {name} <span class="theme-h">({h:.1f}h)</span></div>'
+            for name, h in top_themes(themes_by_task.get(task, []))
+        )
+        st.markdown(
+            f'<div class="task-summary"><span class="task-title">{task}</span> '
+            f'<span class="task-hours">{hrs:.1f} hrs ({pct:.0f}%)</span>{bullets}</div>',
+            unsafe_allow_html=True)
 
 def main():
     with st.sidebar:
@@ -199,10 +295,10 @@ def main():
     if uploaded:
         saved = load_saved_data(); msgs = []
         for uf in uploaded:
-            year, month, summary, detail, err = parse_workinghours_file(uf, uf.name)
+            year, month, record, err = parse_workinghours_file(uf, uf.name)
             if err: msgs.append(("error", f"{uf.name}: {err}")); continue
-            saved[f"{year}_{month}"] = {"summary":summary, "detail":detail}
-            msgs.append(("success", f"Loaded {month} {year} ({sum(summary.values()):.0f}h)"))
+            saved[f"{year}_{month}"] = record
+            msgs.append(("success", f"Loaded {month} {year} ({sum(record['summary'].values()):.0f}h)"))
         save_data(saved)
         for kind, msg in msgs:
             (st.sidebar.success if kind=="success" else st.sidebar.error)(("✅ " if kind=="success" else "⚠️ ")+msg)
@@ -216,35 +312,36 @@ def main():
         keys = sorted(saved.keys(), key=lambda k:(int(k.split("_")[0]), MONTH_ORDER.index(k.split("_")[1])))
         labels = [f"{k.split('_')[1]} {k.split('_')[0]}" for k in keys]
         sel_label = st.selectbox("Select month", labels, index=len(labels)-1)
-        task_hours = get_summary(saved[keys[labels.index(sel_label)]])
+        entry = saved[keys[labels.index(sel_label)]]
+        task_hours = get_summary(entry); themes = get_themes(entry); daily = get_daily(entry)
         total = sum(task_hours.values())
         company = sum(v for k,v in task_hours.items() if k in COMPANY_TASKS); other = total-company
+        sel_mon_abbr, sel_year = sel_label.split()
+        month_label = f"{MONTH_LONG.get(sel_mon_abbr, sel_mon_abbr)} {sel_year}"
+
         c1,c2,c3,c4 = st.columns(4)
         c1.markdown(f'<div class="metric-card"><div class="metric-label">Total Hours</div><div class="metric-value">{total:.1f}</div><div class="metric-sub">{sel_label}</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-card"><div class="metric-label">Company Support</div><div class="metric-value">{company:.1f}h</div><div class="metric-sub">{company/total*100:.0f}% of total</div></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="metric-card"><div class="metric-label">Other Tasks</div><div class="metric-value">{other:.1f}h</div><div class="metric-sub">{other/total*100:.0f}% of total</div></div>', unsafe_allow_html=True)
         top = max(task_hours, key=task_hours.get)
         c4.markdown(f'<div class="metric-card"><div class="metric-label">Top Task</div><div class="metric-value" style="font-size:1.2rem">{top}</div><div class="metric-sub">{task_hours[top]:.1f}h</div></div>', unsafe_allow_html=True)
+
         st.markdown("")
         cl,cr = st.columns(2)
         with cl:
             st.markdown('<div class="section-header">Hours Breakdown</div>', unsafe_allow_html=True)
             st.plotly_chart(make_donut(task_hours, sel_label), use_container_width=True)
         with cr:
-            st.markdown('<div class="section-header">Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
-            f = make_goal_bars(task_hours, total)
-            if f: st.plotly_chart(f, use_container_width=True)
-        cl,cr = st.columns(2)
-        with cl:
-            st.markdown('<div class="section-header">Goal Status</div>', unsafe_allow_html=True)
-            for task, goal_pct in GOALS_2026.items():
-                ap = task_hours.get(task,0)/total if total else 0
-                color = traffic_light(ap, goal_pct)
-                st.markdown(f'<div class="traffic-row"><span class="dot-{color}"></span><span style="flex:1;font-weight:500">{task}</span><span style="font-family:DM Mono;font-size:0.8rem;color:#7a7874">{ap*100:.1f}% / {goal_pct*100:.0f}%</span></div>', unsafe_allow_html=True)
-        with cr:
-            st.markdown('<div class="section-header">Auto Commentary</div>', unsafe_allow_html=True)
-            for line in generate_commentary(task_hours, total):
-                st.markdown(f'<div class="commentary-box">{line}</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Hours Worked Per Day</div>', unsafe_allow_html=True)
+            if daily: st.plotly_chart(make_daily_bars(daily), use_container_width=True)
+            else: st.info("No daily data available for this month.")
+
+        st.markdown('<div class="section-header">Key Areas of Time Usage</div>', unsafe_allow_html=True)
+        render_task_cards(task_hours, themes, total)
+
+        st.markdown('<div class="section-header">📋 Ready-to-Send Email Text</div>', unsafe_allow_html=True)
+        st.caption("Copy this straight into your email to Taylor & Sarah:")
+        st.code(build_email_text(task_hours, themes, total, month_label), language=None)
 
     elif view == "📈 Quarterly":
         st.markdown("# Quarterly Review")
@@ -256,12 +353,15 @@ def main():
         sel_year = c1.selectbox("Year", years)
         avail = [q for q,ms in quarters.items() if any(f"{sel_year}_{m}" in saved for m in ms)]
         sel_q = c2.selectbox("Quarter", avail or ["Q1"])
-        q_hours, monthly = {}, {}
+        q_hours, q_themes, monthly = {}, {}, {}
         for m in quarters[sel_q]:
             key = f"{sel_year}_{m}"
             if key in saved:
                 s = get_summary(saved[key]); monthly[m] = s
                 for t,h in s.items(): q_hours[t] = q_hours.get(t,0)+h
+                for t, tlist in get_themes(saved[key]).items():
+                    q_themes.setdefault(t, {})
+                    for name, hh in tlist: q_themes[t][name] = q_themes[t].get(name,0)+hh
         if not q_hours: st.info(f"No data for {sel_q} {sel_year} yet."); return
         total_q = sum(q_hours.values()); loaded = len(monthly)
         c1,c2,c3 = st.columns(3)
@@ -280,15 +380,9 @@ def main():
                 md = {(sel_year,m):monthly[m] for m in monthly}
                 st.plotly_chart(make_trend(md, sorted(q_hours, key=q_hours.get, reverse=True)[:6]), use_container_width=True)
             else: st.info("Upload more months to see the trend.")
-        st.markdown(f'<div class="section-header">Goal vs. Actual — {sel_q} {sel_year}</div>', unsafe_allow_html=True)
-        rows = []
-        for task, goal_pct in GOALS_2026.items():
-            ah = q_hours.get(task,0); ap = ah/total_q if total_q else 0; c = traffic_light(ap, goal_pct)
-            rows.append({"":"🟢" if c=="green" else ("🟡" if c=="yellow" else "🔴"),"Task":task,"Hours":f"{ah:.1f}h","Actual %":f"{ap*100:.1f}%","Goal %":f"{goal_pct*100:.1f}%","Δ":f"{(ap-goal_pct)*100:+.1f}pp"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.markdown('<div class="section-header">Quarter Commentary</div>', unsafe_allow_html=True)
-        for line in generate_commentary(q_hours, total_q):
-            st.markdown(f'<div class="commentary-box">{line}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">Key Areas of Time Usage — Quarter</div>', unsafe_allow_html=True)
+        q_themes_sorted = {t: sorted(d.items(), key=lambda x:-x[1]) for t,d in q_themes.items()}
+        render_task_cards(q_hours, q_themes_sorted, total_q)
 
     elif view == "🗓 Annual":
         st.markdown("# Annual Review")
@@ -317,6 +411,9 @@ def main():
         with cr:
             st.markdown('<div class="section-header">Monthly Trend (Top 6)</div>', unsafe_allow_html=True)
             st.plotly_chart(make_trend(monthly, sorted(y_hours, key=y_hours.get, reverse=True)[:6]), use_container_width=True)
+        st.markdown('<div class="section-header">Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
+        f = make_goal_bars(y_hours, total_y)
+        if f: st.plotly_chart(f, use_container_width=True)
         st.markdown('<div class="section-header">Annual Pace Tracker</div>', unsafe_allow_html=True)
         rows = []
         for task, goal_pct in GOALS_2026.items():
