@@ -1,65 +1,56 @@
 # NR Calendar Audit Dashboard
 
-A polished, shareable web dashboard for monthly, quarterly, and annual calendar audits — plus context switching analysis.
+A polished, shareable web dashboard for monthly, quarterly, and annual calendar audits — plus context switching analysis. One file upload powers everything.
+
+---
+
+## 📛 File naming (IMPORTANT)
+
+Name each monthly export like this so the app knows which month it is:
+
+- `WorkingHours_January_2026.xlsx`
+- `WorkingHours_February_2026.xlsx`
+- `WorkingHours_May_2026.xlsx`
+
+The file must have these columns: **Day, Start, End, Work unit description, Duration, Task**
+(The Start/End columns are what power the Context Switching timeline — keep them in!)
 
 ---
 
 ## 🚀 Deploy in 4 steps (no code needed)
 
-### Step 1 — Create a free GitHub account
-Go to **github.com** → Sign up (just email + password).
+### Step 1 — GitHub account
+Go to **github.com** → Sign up.
 
-### Step 2 — Create a new repository
-1. Click the **+** in the top right → **New repository**
-2. Name it `nr-dashboard` (or anything you like)
-3. Set it to **Private**
-4. Click **Create repository**
+### Step 2 — New repository
++ icon (top right) → New repository → name it → **Private** → Create.
 
-### Step 3 — Upload these files
-1. On your new repo page, click **uploading an existing file**
-2. Drag and drop **all 3 files** from this folder:
-   - `app.py`
-   - `requirements.txt`
-   - `README.md`
-3. Click **Commit changes**
+### Step 3 — Upload files
+On the repo page, click **"uploading an existing file"**, then drag in all 3 files
+(`app.py`, `requirements.txt`, `README.md`) → Commit changes.
 
 ### Step 4 — Deploy on Streamlit
-1. Go to **share.streamlit.io** → Sign up with your GitHub account
-2. Click **New app**
-3. Choose your `nr-dashboard` repo
-4. Set **Main file path** to `app.py`
-5. Click **Deploy** — it'll be live in ~2 minutes!
-6. You'll get a URL like `https://yourname-nr-dashboard.streamlit.app`
+1. Go to **share.streamlit.io** → Sign in with GitHub
+2. Click **Deploy a public app from GitHub** (the app is shareable by link; your code stays private)
+3. Repository: your repo · Branch: `main` · Main file path: `app.py`
+4. Click **Deploy** — live in ~2 minutes!
 
 ---
 
 ## 📊 How to use it
 
-### Monthly Audit
-1. Sidebar → **Upload Time Report** → drop in your monthly Excel
-2. The app parses it automatically and stores the data
-3. Select any month from the dropdown to review
-4. Share the URL with your boss — they can view everything
+1. Sidebar → upload your `WorkingHours_<Month>_<Year>.xlsx`
+2. The app reads it, stores it, and fills in Monthly / Quarterly / Annual / Context Switching automatically
+3. Upload more months anytime — quarterly & annual views build themselves
+4. Share the URL with your boss
 
-### Context Switching
-1. Sidebar → **⚡ Context Switching**
-2. Upload your Toggl working hours export
-3. Select any day to see the full timeline
-
-### Data persists between sessions
-Each time you upload a new month, it gets added to the database. Quarterly and annual views build automatically as you add months.
+### The 4 views
+- **📊 Monthly** — breakdown donut, actual vs goal bars, traffic-light goal status, auto commentary
+- **📈 Quarterly** — auto-rolls up 3 months, trend lines, goal table
+- **🗓 Annual** — YTD totals, full-year pace projection, annual tracker
+- **⚡ Context Switching** — daily task progression on a real time axis, hover for work details
 
 ---
 
-## 📁 File format
-
-The app expects the same Excel format you already use:
-- Monthly sheets named like `APR 2026`, `JAN 2026`, etc.
-- Columns: Day, Task, Time/Duration
-- A totals sheet named `2026 Totals` or similar
-
----
-
-## 🆘 Help
-
-If anything looks off after uploading, check that your sheet names include the month abbreviation (JAN, FEB, MAR, etc.) and the year.
+## 🔄 Updating your 2026 goals
+Open `app.py`, find the `GOALS_2026` block near the top, and edit the percentages. Commit the change on GitHub and the app redeploys automatically.
