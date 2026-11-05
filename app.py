@@ -137,6 +137,13 @@ def parse_workinghours_file(uploaded_file, filename):
     if year is None or month is None:
         return None, None, None, "Couldn't determine month/year. Name the file like 'WorkingHours_May_2026.xlsx'."
 
+    # Exports can spill a few days into the next or prior month (weeks start on Monday).
+    # Keep only this file's month so those days aren't counted twice.
+    days = pd.to_datetime(df["Day"], errors="coerce")
+    df = df[(days.dt.year == year) & (days.dt.month == MONTH_ORDER.index(month) + 1)].copy()
+    if df.empty:
+        return None, None, None, f"No rows dated in {MONTH_LONG[month]} {year}. Check the file name matches its dates."
+
     df["canon"] = df["Task"].apply(normalize_task)
     df["desc"] = df["Work unit description"].fillna("") if "Work unit description" in df.columns else ""
     df["day_str"] = pd.to_datetime(df["Day"]).dt.strftime("%b %d")
