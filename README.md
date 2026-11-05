@@ -1,6 +1,6 @@
 # NR Calendar Audit Dashboard
 
-A polished, shareable web dashboard for monthly, quarterly, and annual calendar audits — plus context switching analysis. One file upload powers everything.
+A polished, shareable web dashboard for monthly, quarterly, and annual calendar audits, plus context switching analysis. One file per month powers everything.
 
 ---
 
@@ -13,42 +13,47 @@ Name each monthly export like this so the app knows which month it is:
 - `WorkingHours_May_2026.xlsx`
 
 The file must have these columns: **Day, Start, End, Work unit description, Duration, Task**
-(The Start/End columns are what power the Context Switching timeline — keep them in!)
+(The Start/End columns are what power the Context Switching timeline, so keep them in!)
 
 ---
 
 ## 🚀 Deploy in 4 steps (no code needed)
 
-### Step 1 — GitHub account
+### Step 1: GitHub account
 Go to **github.com** → Sign up.
 
-### Step 2 — New repository
+### Step 2: New repository
 + icon (top right) → New repository → name it → **Private** → Create.
 
-### Step 3 — Upload files
+### Step 3: Upload files
 On the repo page, click **"uploading an existing file"**, then drag in all 3 files
 (`app.py`, `requirements.txt`, `README.md`) → Commit changes.
 
-### Step 4 — Deploy on Streamlit
+### Step 4: Deploy on Streamlit
 1. Go to **share.streamlit.io** → Sign in with GitHub
 2. Click **Deploy a public app from GitHub** (the app is shareable by link; your code stays private)
 3. Repository: your repo · Branch: `main` · Main file path: `app.py`
-4. Click **Deploy** — live in ~2 minutes!
+4. Click **Deploy**, live in about 2 minutes
 
 ---
 
 ## 📊 How to use it
 
-1. Sidebar → upload your `WorkingHours_<Month>_<Year>.xlsx`
-2. The app reads it, stores it, and fills in Monthly / Quarterly / Annual / Context Switching automatically
-3. Upload more months anytime — quarterly & annual views build themselves
-4. Share the URL with your boss
+Your monthly files are stored in the **data** folder of this repo, and the app loads every file in that folder each time it opens. Nothing ever needs to be re-uploaded, and anyone with the link sees every month.
+
+To add a new month:
+1. Open the **data** folder in this repo on GitHub
+2. Click **Add file**, then **Upload files**
+3. Drag in `WorkingHours_<Month>_<Year>.xlsx` and click **Commit changes**
+4. The site updates in about 2 minutes
+
+To fix a month, upload a corrected file with the same name (it replaces the old one). To remove a month, open the file in the data folder, click the **...** menu, and choose **Delete file**.
 
 ### The 4 views
-- **📊 Monthly** — breakdown donut, actual vs goal bars, traffic-light goal status, auto commentary
-- **📈 Quarterly** — auto-rolls up 3 months, trend lines, goal table
-- **🗓 Annual** — YTD totals, full-year pace projection, annual tracker
-- **⚡ Context Switching** — daily task progression on a real time axis, hover for work details
+- **📊 Monthly**: breakdown donut, hours per day, company support charts, weekly hours, key areas of time
+- **📈 Quarterly**: auto-rolls up 3 months, trend lines, goal table
+- **🗓 Annual**: YTD totals, full-year pace projection, annual tracker
+- **⚡ Context Switching**: daily task progression on a real time axis, hover for work details
 
 ---
 

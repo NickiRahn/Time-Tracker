@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -24,12 +23,14 @@ COMPANY_TASKS = {"MAPCO","MAGNUM","MCP","MCC","M-COMPANIES","MTI","MFE","CORP DE
 # Excluded from the "Company Support vs All Other DUTIES" comparison (non-duty buckets).
 # To count commuting as a duty, remove "COMMUTING/TRAVEL" from this set.
 NON_DUTY = {"PTO/SICK TIME","OFFICE CLOSED","COMMUTING/TRAVEL"}
-DATA_FILE = "saved_data.json"
+# Monthly WorkingHours files live in the "data" folder of the GitHub repo.
+# Everything in that folder loads automatically every time the app opens.
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 MONTH_ORDER = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"]
 MONTH_FULL = {"JANUARY":"JAN","FEBRUARY":"FEB","MARCH":"MAR","APRIL":"APR","MAY":"MAY","JUNE":"JUN","JULY":"JUL","AUGUST":"AUG","SEPTEMBER":"SEP","OCTOBER":"OCT","NOVEMBER":"NOV","DECEMBER":"DEC"}
 MONTH_LONG = {v:k.title() for k,v in MONTH_FULL.items()}
 
-# ── Theme bundling — applied WITHIN each task only, never across tasks. ───────
+# ── Theme bundling: applied WITHIN each task only, never across tasks. ───────
 # First match wins. Add/edit lines as your projects change.
 # Each line: ("Theme Name", ["keyword", "keyword", ...])
 THEME_RULES = [
@@ -116,16 +117,6 @@ def parse_filename_period(filename):
             if re.search(rf"\b{abbr}\b", name): month = abbr; break
     return year, month
 
-def load_saved_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE) as f: return json.load(f)
-        except (json.JSONDecodeError, IOError): return {}
-    return {}
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f, indent=2)
-
 def parse_workinghours_file(uploaded_file, filename):
     try:
         df = pd.read_excel(uploaded_file)
@@ -176,6 +167,23 @@ def parse_workinghours_file(uploaded_file, filename):
 
     record = {"summary":summary, "themes":themes, "daily":daily, "detail":detail}
     return year, month, record, None
+
+@st.cache_data(show_spinner=False)
+def _parse_cached(path, mtime):
+    # mtime is part of the cache key, so a replaced file is re-read automatically
+    return parse_workinghours_file(path, os.path.basename(path))
+
+def load_all_months():
+    """Read every WorkingHours file in the data folder. Returns ({"2026_MAY": record}, [errors])."""
+    saved, errors = {}, []
+    if not os.path.isdir(DATA_DIR): return saved, errors
+    for fn in sorted(os.listdir(DATA_DIR)):
+        if fn.startswith((".", "~$")) or not fn.lower().endswith((".xlsx", ".xls")): continue
+        path = os.path.join(DATA_DIR, fn)
+        year, month, record, err = _parse_cached(path, os.path.getmtime(path))
+        if err: errors.append(f"{fn}: {err}"); continue
+        saved[f"{year}_{month}"] = record
+    return saved, errors
 
 def top_themes(theme_list, min_h=THEME_MIN_HOURS, n=THEME_TOP_N):
     out = [(name, h) for name, h in theme_list if h >= min_h]
@@ -284,7 +292,7 @@ def make_entity_grouped_bars(labels, month_task_hours_list):
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", bargap=0.25, bargroupgap=0.05)
     return fig
 
-def make_entity_distribution(month_task_hours_list, title="Entity Support — Totals"):
+def make_entity_distribution(month_task_hours_list, title="Entity Support: Totals"):
     entities, totals = _entities_present(month_task_hours_list)
     if not entities: return None
     comp = {e: totals[e] for e in entities}
@@ -340,7 +348,7 @@ def generate_commentary(task_hours, total_hours):
     for task, goal_pct in GOALS_2026.items():
         if goal_pct == 0: continue
         ah = task_hours.get(task,0); ap = ah/total_hours; ratio = ap/goal_pct
-        if ratio > 1.5: lines.append(f"🔴 **{task}** is at {ap*100:.1f}% — {ratio:.1f}× your {goal_pct*100:.0f}% goal. Consider rebalancing.")
+        if ratio > 1.5: lines.append(f"🔴 **{task}** is at {ap*100:.1f}%, {ratio:.1f}× your {goal_pct*100:.0f}% goal. Consider rebalancing.")
         elif ratio > 1.25: lines.append(f"🟡 **{task}** is slightly above goal ({ap*100:.1f}% vs {goal_pct*100:.0f}%).")
         elif ratio < 0.5 and ah > 0: lines.append(f"🟡 **{task}** is well below goal ({ap*100:.1f}% vs {goal_pct*100:.0f}%).")
     if not lines: lines.append("✅ All tasks are tracking close to 2026 goals.")
@@ -381,40 +389,24 @@ def render_task_cards(task_hours, themes_by_task, total):
             unsafe_allow_html=True)
 
 def main():
+    saved, load_errors = load_all_months()
+
     with st.sidebar:
         st.markdown("## 📅 NR Calendar Audit")
         st.markdown("---")
-        st.markdown("### Upload Monthly Report")
-        st.caption("Name files like **WorkingHours_May_2026.xlsx**")
-        uploaded = st.file_uploader("Drop your monthly WorkingHours export", type=["xlsx","xls"], accept_multiple_files=True)
-        st.markdown("---")
         view = st.radio("View", ["📊 Monthly","📈 Quarterly","🗓 Annual","⚡ Context Switching"], label_visibility="collapsed")
         st.markdown("---")
-        saved = load_saved_data()
         if saved:
             st.markdown(f"**{len(saved)} month(s) stored**")
             for k in sorted(saved.keys(), key=lambda k:(int(k.split('_')[0]), MONTH_ORDER.index(k.split('_')[1]))):
                 st.caption(f"• {k.split('_')[1]} {k.split('_')[0]}")
-            if st.button("🗑 Clear all data", use_container_width=True):
-                save_data({}); st.rerun()
-
-    if uploaded:
-        saved = load_saved_data(); msgs = []
-        for uf in uploaded:
-            year, month, record, err = parse_workinghours_file(uf, uf.name)
-            if err: msgs.append(("error", f"{uf.name}: {err}")); continue
-            saved[f"{year}_{month}"] = record
-            msgs.append(("success", f"Loaded {month} {year} ({sum(record['summary'].values()):.0f}h)"))
-        save_data(saved)
-        for kind, msg in msgs:
-            (st.sidebar.success if kind=="success" else st.sidebar.error)(("✅ " if kind=="success" else "⚠️ ")+msg)
-
-    saved = load_saved_data()
+        for msg in load_errors:
+            st.warning(f"⚠️ {msg}")
 
     if view == "📊 Monthly":
         st.markdown("# Monthly Calendar Audit")
         if not saved:
-            st.markdown('<div class="upload-hint">👆 Upload your monthly WorkingHours file in the sidebar to begin</div>', unsafe_allow_html=True); return
+            st.markdown('<div class="upload-hint">No months stored yet. Add WorkingHours files to the data folder in the GitHub repo.</div>', unsafe_allow_html=True); return
         keys = sorted(saved.keys(), key=lambda k:(int(k.split("_")[0]), MONTH_ORDER.index(k.split("_")[1])))
         labels = [f"{k.split('_')[1]} {k.split('_')[0]}" for k in keys]
         sel_label = st.selectbox("Select month", labels, index=len(labels)-1)
@@ -422,8 +414,8 @@ def main():
         task_hours = get_summary(entry); themes = get_themes(entry); daily = get_daily(entry)
         total = sum(task_hours.values())
         if total <= 0:
-            st.warning("This month loaded with 0 total hours — the Duration column may not have parsed. "
-                       "Check that the file's Duration values look like '2h 5m' or 'HH:MM', then re-upload.")
+            st.warning("This month loaded with 0 total hours. The Duration column may not have parsed. "
+                       "Check that the file's Duration values look like '2h 5m' or 'HH:MM', then replace the file in the data folder.")
             return
         company = sum(v for k,v in task_hours.items() if k in COMPANY_TASKS); other = total-company
 
@@ -469,7 +461,7 @@ def main():
     elif view == "📈 Quarterly":
         st.markdown("# Quarterly Review")
         if not saved:
-            st.markdown('<div class="upload-hint">👆 Upload your monthly files to build quarterly views</div>', unsafe_allow_html=True); return
+            st.markdown('<div class="upload-hint">No months stored yet. Add WorkingHours files to the data folder in the GitHub repo.</div>', unsafe_allow_html=True); return
         quarters = {"Q1":["JAN","FEB","MAR"],"Q2":["APR","MAY","JUN"],"Q3":["JUL","AUG","SEP"],"Q4":["OCT","NOV","DEC"]}
         years = sorted({int(k.split("_")[0]) for k in saved}, reverse=True)
         c1,c2 = st.columns(2)
@@ -502,7 +494,7 @@ def main():
             if loaded > 1:
                 md = {(sel_year,m):monthly[m] for m in monthly}
                 st.plotly_chart(make_trend(md, sorted(q_hours, key=q_hours.get, reverse=True)[:6]), use_container_width=True)
-            else: st.info("Upload more months to see the trend.")
+            else: st.info("Add more months to see the trend.")
         # Entity support charts (match the Q1 tab)
         q_month_labels = [m for m in quarters[sel_q] if m in monthly]
         q_month_list = [monthly[m] for m in q_month_labels]
@@ -512,23 +504,23 @@ def main():
         else: st.info("No direct company-support hours in this quarter yet.")
         cl,cr = st.columns(2)
         with cl:
-            st.markdown('<div class="section-header">Entity Support — Totals</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Entity Support: Totals</div>', unsafe_allow_html=True)
             f_ed = make_entity_distribution(q_month_list, f"{sel_q} {sel_year} Entity Support")
             if f_ed: st.plotly_chart(f_ed, use_container_width=True)
         with cr:
-            st.markdown('<div class="section-header">Entity Support — Stacked by Month</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Entity Support: Stacked by Month</div>', unsafe_allow_html=True)
             f_es = make_entity_stacked_area(q_month_labels, q_month_list)
             if f_es: st.plotly_chart(f_es, use_container_width=True)
-            else: st.info("Upload 2+ months to see the stacked trend.")
+            else: st.info("Add 2+ months to see the stacked trend.")
 
-        st.markdown('<div class="section-header">Key Areas of Time Usage — Quarter</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">Key Areas of Time Usage (Quarter)</div>', unsafe_allow_html=True)
         q_themes_sorted = {t: sorted(d.items(), key=lambda x:-x[1]) for t,d in q_themes.items()}
         render_task_cards(q_hours, q_themes_sorted, total_q)
 
     elif view == "🗓 Annual":
         st.markdown("# Annual Review")
         if not saved:
-            st.markdown('<div class="upload-hint">👆 Upload your monthly files to build the annual view</div>', unsafe_allow_html=True); return
+            st.markdown('<div class="upload-hint">No months stored yet. Add WorkingHours files to the data folder in the GitHub repo.</div>', unsafe_allow_html=True); return
         years = sorted({int(k.split("_")[0]) for k in saved}, reverse=True)
         sel_year = st.selectbox("Year", years)
         keys = [k for k in saved if int(k.split("_")[0])==sel_year]
@@ -562,16 +554,16 @@ def main():
         else: st.info("No direct company-support hours this year yet.")
         cl,cr = st.columns(2)
         with cl:
-            st.markdown('<div class="section-header">Entity Support — Year Totals</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Entity Support: Year Totals</div>', unsafe_allow_html=True)
             f_ed = make_entity_distribution(ann_list, f"{sel_year} Entity Support")
             if f_ed: st.plotly_chart(f_ed, use_container_width=True)
         with cr:
-            st.markdown('<div class="section-header">Entity Support — Stacked by Month</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header">Entity Support: Stacked by Month</div>', unsafe_allow_html=True)
             f_es = make_entity_stacked_area(ann_labels, ann_list)
             if f_es: st.plotly_chart(f_es, use_container_width=True)
-            else: st.info("Upload 2+ months to see the stacked trend.")
+            else: st.info("Add 2+ months to see the stacked trend.")
 
-        st.markdown('<div class="section-header">All Activities — Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-header">All Activities: Actual vs. 2026 Goals</div>', unsafe_allow_html=True)
         f = make_goal_bars(y_hours, total_y)
         if f: st.plotly_chart(f, use_container_width=True)
         st.markdown('<div class="section-header">Annual Pace Tracker</div>', unsafe_allow_html=True)
@@ -588,7 +580,7 @@ def main():
         st.markdown("# Context Switching")
         detail_months = {k:e["detail"] for k,e in saved.items() if isinstance(e, dict) and e.get("detail")}
         if not detail_months:
-            st.markdown('<div class="upload-hint">👆 Upload a WorkingHours file that includes Start and End time columns to see your context switching timeline</div>', unsafe_allow_html=True); return
+            st.markdown('<div class="upload-hint">Add a WorkingHours file that includes Start and End time columns to see your context switching timeline</div>', unsafe_allow_html=True); return
         mkeys = sorted(detail_months.keys(), key=lambda k:(int(k.split("_")[0]), MONTH_ORDER.index(k.split("_")[1])))
         mlabels = [f"{k.split('_')[1]} {k.split('_')[0]}" for k in mkeys]
         sel_mkey = mkeys[mlabels.index(st.selectbox("Month", mlabels, index=len(mlabels)-1))]
@@ -613,7 +605,7 @@ def main():
         for d in plot:
             xs.append(to_mins(d["start"])); ys.append(tidx.get(d["task"],0)); colors.append(task_color(d["task"]))
             is_end = d.get("_end", False); sizes.append(5 if is_end else 9)
-            if is_end: hovers.append(f"{d['start']} — end of day<br>{d['task']}")
+            if is_end: hovers.append(f"{d['start']}, end of day<br>{d['task']}")
             else:
                 desc = f"<br>{d['desc']}" if d["desc"] else ""
                 hovers.append(f"{d['start']} – {d['end']}<br><b>{d['task']}</b>{desc}")
